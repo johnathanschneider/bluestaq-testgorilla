@@ -1,0 +1,2 @@
+# bluestaq-testgorilla
+Notetaking API
