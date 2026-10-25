@@ -1,4 +1,6 @@
+import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "../../db/connection";
+import { teamMembers, teams, users } from "../../db/schema";
 
 export interface Team {
   id: string;
@@ -7,29 +9,36 @@ export interface Team {
 }
 
 export function teamsRepository(db: Db) {
-  const insertTeam = db.prepare("INSERT INTO teams (id, name, created_at) VALUES (?, ?, ?)");
-  const insertMember = db.prepare(
-    "INSERT OR IGNORE INTO team_members (team_id, user_id) VALUES (?, ?)",
-  );
-  const memberStmt = db.prepare("SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ?");
-  const teamExists = db.prepare("SELECT 1 FROM teams WHERE id = ?");
-  const userExists = db.prepare("SELECT 1 FROM users WHERE id = ?");
-  const forUser = db.prepare(
-    `SELECT t.id, t.name, t.created_at AS createdAt FROM teams t
-     JOIN team_members m ON m.team_id = t.id WHERE m.user_id = ? ORDER BY t.name`,
-  );
+  const addMember = (teamId: string, userId: string) =>
+    void db.insert(teamMembers).values({ teamId, userId }).onConflictDoNothing().run();
 
   return {
     /** Creates the team and enrolls its creator atomically. */
-    create: db.transaction((team: Team, creatorId: string) => {
-      insertTeam.run(team.id, team.name, team.createdAt);
-      insertMember.run(team.id, creatorId);
-    }),
-    addMember: (teamId: string, userId: string) => void insertMember.run(teamId, userId),
-    isMember: (teamId: string, userId: string) => memberStmt.get(teamId, userId) !== undefined,
-    teamExists: (teamId: string) => teamExists.get(teamId) !== undefined,
-    userExists: (userId: string) => userExists.get(userId) !== undefined,
-    listForUser: (userId: string) => forUser.all(userId) as Team[],
+    create(team: Team, creatorId: string) {
+      db.transaction((tx) => {
+        tx.insert(teams).values(team).run();
+        tx.insert(teamMembers).values({ teamId: team.id, userId: creatorId }).run();
+      });
+    },
+    addMember,
+    isMember: (teamId: string, userId: string) =>
+      db
+        .select({ one: teamMembers.teamId })
+        .from(teamMembers)
+        .where(and(eq(teamMembers.teamId, teamId), eq(teamMembers.userId, userId)))
+        .get() !== undefined,
+    teamExists: (teamId: string) =>
+      db.select({ one: teams.id }).from(teams).where(eq(teams.id, teamId)).get() !== undefined,
+    userExists: (userId: string) =>
+      db.select({ one: users.id }).from(users).where(eq(users.id, userId)).get() !== undefined,
+    listForUser: (userId: string): Team[] =>
+      db
+        .select({ id: teams.id, name: teams.name, createdAt: teams.createdAt })
+        .from(teams)
+        .innerJoin(teamMembers, eq(teamMembers.teamId, teams.id))
+        .where(eq(teamMembers.userId, userId))
+        .orderBy(asc(teams.name))
+        .all(),
   };
 }
 

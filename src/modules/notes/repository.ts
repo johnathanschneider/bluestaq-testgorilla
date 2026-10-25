@@ -1,4 +1,6 @@
+import { and, eq, exists, inArray, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../../db/connection";
+import { noteTags, notes, teamMembers } from "../../db/schema";
 
 export interface Note {
   id: string;
@@ -21,86 +23,86 @@ export interface ListFilter {
   limit: number;
 }
 
-interface NoteRow extends Omit<Note, "tags"> {
-  tags: string;
-}
-
-const SELECT = `
-  SELECT n.id, n.author_id AS authorId, n.team_id AS teamId, n.title, n.body,
-         n.created_at AS createdAt, n.updated_at AS updatedAt,
-         (SELECT json_group_array(tag) FROM
-            (SELECT tag FROM note_tags WHERE note_id = n.id ORDER BY tag)) AS tags
-  FROM notes n`;
-
-const toNote = (row: NoteRow): Note => ({ ...row, tags: JSON.parse(row.tags) });
-
 export function notesRepository(db: Db) {
-  const insertNote = db.prepare(
-    `INSERT INTO notes (id, author_id, team_id, title, body, created_at, updated_at)
-     VALUES (@id, @authorId, @teamId, @title, @body, @createdAt, @updatedAt)`,
-  );
-  const updateNote = db.prepare(
-    `UPDATE notes SET team_id = @teamId, title = @title, body = @body, updated_at = @updatedAt
-     WHERE id = @id`,
-  );
-  const deleteNote = db.prepare("DELETE FROM notes WHERE id = ?");
-  const insertTag = db.prepare("INSERT INTO note_tags (note_id, tag) VALUES (?, ?)");
-  const deleteTags = db.prepare("DELETE FROM note_tags WHERE note_id = ?");
-  const byId = db.prepare(`${SELECT} WHERE n.id = ?`);
-
-  const replaceTags = (noteId: string, tags: string[]) => {
-    deleteTags.run(noteId);
-    for (const t of tags) insertTag.run(noteId, t);
-  };
+  /** Attach tags (sorted) to note rows with one extra query. */
+  function withTags(rows: Omit<Note, "tags">[]): Note[] {
+    if (rows.length === 0) return [];
+    const tagRows = db
+      .select()
+      .from(noteTags)
+      .where(inArray(noteTags.noteId, rows.map((r) => r.id)))
+      .all();
+    const byNote = new Map<string, string[]>();
+    for (const { noteId, tag } of tagRows) byNote.set(noteId, [...(byNote.get(noteId) ?? []), tag]);
+    return rows.map((r) => ({ ...r, tags: (byNote.get(r.id) ?? []).sort() }));
+  }
 
   return {
-    insert: db.transaction((note: Note) => {
-      insertNote.run(note);
-      replaceTags(note.id, note.tags);
-    }),
+    insert(note: Note) {
+      const { tags, ...row } = note;
+      db.transaction((tx) => {
+        tx.insert(notes).values(row).run();
+        if (tags.length) tx.insert(noteTags).values(tags.map((tag) => ({ noteId: note.id, tag }))).run();
+      });
+    },
 
     /** Persists the full note state; tags are replaced wholesale. */
-    save: db.transaction((note: Note) => {
-      updateNote.run(note);
-      replaceTags(note.id, note.tags);
-    }),
+    save(note: Note) {
+      const { tags, id, ...row } = note;
+      db.transaction((tx) => {
+        tx.update(notes).set(row).where(eq(notes.id, id)).run();
+        tx.delete(noteTags).where(eq(noteTags.noteId, id)).run();
+        if (tags.length) tx.insert(noteTags).values(tags.map((tag) => ({ noteId: id, tag }))).run();
+      });
+    },
 
-    remove: (id: string) => void deleteNote.run(id),
+    remove: (id: string) => void db.delete(notes).where(eq(notes.id, id)).run(),
 
     find(id: string): Note | undefined {
-      const row = byId.get(id) as NoteRow | undefined;
-      return row && toNote(row);
+      const row = db.select().from(notes).where(eq(notes.id, id)).get();
+      return row && withTags([row])[0];
     },
 
     /** Notes the user may read, newest-updated first, using keyset pagination. */
     list(f: ListFilter): Note[] {
-      const params: Record<string, unknown> = { userId: f.userId, limit: f.limit };
-      const where = [
-        `(n.author_id = @userId OR n.team_id IN
-           (SELECT team_id FROM team_members WHERE user_id = @userId))`,
+      const conditions: (SQL | undefined)[] = [
+        or(
+          eq(notes.authorId, f.userId),
+          inArray(
+            notes.teamId,
+            db.select({ teamId: teamMembers.teamId }).from(teamMembers).where(eq(teamMembers.userId, f.userId)),
+          ),
+        ),
       ];
-      let join = "";
       if (f.match !== undefined) {
-        join = "JOIN notes_fts ON notes_fts.rowid = n.rowid";
-        where.push("notes_fts MATCH @match");
-        params.match = f.match;
+        // notes_fts is an FTS5 table outside the Drizzle schema, so this stays raw SQL.
+        conditions.push(
+          sql`${notes}.rowid IN (SELECT rowid FROM notes_fts WHERE notes_fts MATCH ${f.match})`,
+        );
       }
-      if (f.teamId !== undefined) {
-        where.push("n.team_id = @teamId");
-        params.teamId = f.teamId;
-      }
+      if (f.teamId !== undefined) conditions.push(eq(notes.teamId, f.teamId));
       if (f.tag !== undefined) {
-        where.push("EXISTS (SELECT 1 FROM note_tags t WHERE t.note_id = n.id AND t.tag = @tag)");
-        params.tag = f.tag;
+        conditions.push(
+          exists(
+            db
+              .select({ one: noteTags.noteId })
+              .from(noteTags)
+              .where(and(eq(noteTags.noteId, notes.id), eq(noteTags.tag, f.tag))),
+          ),
+        );
       }
       if (f.after) {
-        where.push("(n.updated_at, n.id) < (@afterUpdated, @afterId)");
-        params.afterUpdated = f.after.updatedAt;
-        params.afterId = f.after.id;
+        // Row-value comparison has no Drizzle helper.
+        conditions.push(sql`(${notes.updatedAt}, ${notes.id}) < (${f.after.updatedAt}, ${f.after.id})`);
       }
-      const sql = `${SELECT} ${join} WHERE ${where.join(" AND ")}
-                   ORDER BY n.updated_at DESC, n.id DESC LIMIT @limit`;
-      return (db.prepare(sql).all(params) as NoteRow[]).map(toNote);
+      const rows = db
+        .select()
+        .from(notes)
+        .where(and(...conditions))
+        .orderBy(sql`${notes.updatedAt} DESC`, sql`${notes.id} DESC`)
+        .limit(f.limit)
+        .all();
+      return withTags(rows);
     },
   };
 }

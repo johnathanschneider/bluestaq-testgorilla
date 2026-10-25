@@ -1,5 +1,7 @@
+import { eq } from "drizzle-orm";
 import type { RequestHandler } from "express";
 import type { Db } from "../db/connection";
+import { users } from "../db/schema";
 import { unauthorized } from "../errors";
 
 declare module "express-serve-static-core" {
@@ -14,10 +16,10 @@ declare module "express-serve-static-core" {
  * token/JWT verification does not touch any route or service.
  */
 export function identify(db: Db): RequestHandler {
-  const find = db.prepare("SELECT id FROM users WHERE id = ?");
   return (req, _res, next) => {
     const id = req.header("x-user-id");
-    if (!id || !find.get(id)) throw unauthorized();
+    const user = id ? db.select({ id: users.id }).from(users).where(eq(users.id, id)).get() : undefined;
+    if (!id || !user) throw unauthorized();
     req.userId = id;
     next();
   };

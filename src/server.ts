@@ -9,7 +9,7 @@ const server = createApp(db).listen(config.port, () => {
 
 function shutdown() {
   server.close(() => {
-    db.close();
+    db.$client.close();
     process.exit(0);
   });
 }

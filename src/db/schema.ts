@@ -1,58 +1,61 @@
-// Kept as a TS string (not a .sql file) so `tsc` output is self-contained.
-export const schema = `
-CREATE TABLE IF NOT EXISTS users (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  created_at TEXT NOT NULL
+import { index, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+// The notes_fts FTS5 table and its sync triggers are not expressible here; they
+// live in a hand-written migration (see drizzle/*_fts.sql).
+
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const teams = sqliteTable("teams", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const teamMembers = sqliteTable(
+  "team_members",
+  {
+    teamId: text("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.teamId, t.userId] }), index("idx_team_members_user").on(t.userId)],
 );
 
-CREATE TABLE IF NOT EXISTS teams (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  created_at TEXT NOT NULL
+// teamId NULL means the note is private to its author.
+export const notes = sqliteTable(
+  "notes",
+  {
+    id: text("id").primaryKey(),
+    authorId: text("author_id")
+      .notNull()
+      .references(() => users.id),
+    teamId: text("team_id").references(() => teams.id),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    index("idx_notes_updated").on(t.updatedAt, t.id),
+    index("idx_notes_author").on(t.authorId),
+    index("idx_notes_team").on(t.teamId),
+  ],
 );
 
-CREATE TABLE IF NOT EXISTS team_members (
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  PRIMARY KEY (team_id, user_id)
+export const noteTags = sqliteTable(
+  "note_tags",
+  {
+    noteId: text("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+    tag: text("tag").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.noteId, t.tag] }), index("idx_note_tags_tag").on(t.tag)],
 );
-CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id);
-
--- team_id NULL means the note is private to its author.
-CREATE TABLE IF NOT EXISTS notes (
-  id         TEXT PRIMARY KEY,
-  author_id  TEXT NOT NULL REFERENCES users(id),
-  team_id    TEXT REFERENCES teams(id),
-  title      TEXT NOT NULL,
-  body       TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_notes_author ON notes(author_id);
-CREATE INDEX IF NOT EXISTS idx_notes_team ON notes(team_id);
-
-CREATE TABLE IF NOT EXISTS note_tags (
-  note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-  tag     TEXT NOT NULL,
-  PRIMARY KEY (note_id, tag)
-);
-CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag);
-
--- External-content FTS index over notes, kept in sync by triggers.
-CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-  title, body, content='notes', content_rowid='rowid'
-);
-
-CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-  INSERT INTO notes_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-END;
-CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-  INSERT INTO notes_fts(notes_fts, rowid, title, body) VALUES ('delete', old.rowid, old.title, old.body);
-END;
-CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-  INSERT INTO notes_fts(notes_fts, rowid, title, body) VALUES ('delete', old.rowid, old.title, old.body);
-  INSERT INTO notes_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-END;
-`;

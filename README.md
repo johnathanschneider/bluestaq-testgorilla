@@ -15,9 +15,20 @@ npm run build && npm start
 
 Config via env: `PORT` (default 3000), `DB_PATH` (default `notes.db`; `:memory:` works).
 
+### Database and migrations
+
+The schema is defined in TypeScript ([src/db/schema.ts](src/db/schema.ts)) with Drizzle ORM. SQL migrations in [drizzle/](drizzle) are applied automatically on startup (including in tests).
+
+```bash
+npm run db:generate    # after editing schema.ts: generate a new migration
+npm run db:studio      # browse the database in a web UI (DB_PATH selects the file)
+```
+
+`drizzle/0001_fts.sql` is hand-written: the FTS5 search index and its triggers cannot be expressed in the TypeScript schema. If you have a `notes.db` created before the move to Drizzle, delete it; it was built by the old schema bootstrap and will conflict with the migrations.
+
 ## Try it with Bruno
 
-[`bruno/`](bruno) is a [Bruno](https://www.usebruno.com) collection with sample data. With the server running, open the folder in Bruno (Open Collection), pick the **local** environment, and run the collection (or the folders in order). The Setup folder creates users ann, bob and cara plus a team and stores their ids as variables for later requests, so each run starts from fresh data. Every request has assertions; names show the expected status. CLI: `npx @usebruno/cli run -r --env local` from inside `bruno/`.
+[`bruno/`](bruno) is a [Bruno](https://www.usebruno.com) collection with sample data. With the server running, open the folder in Bruno (Open Collection), pick the **local** environment, and run the whole collection. Folders are by resource (Users, Teams, Notes) and run in that order: Users creates ann, bob and cara and Teams creates a team with ann and bob, storing their ids as variables for the Notes requests, so each run starts from fresh data (run the folders in order, not individually). Every request has assertions; names show the expected status. CLI: `npx @usebruno/cli run -r --env local` from inside `bruno/`.
 
 ## Concepts
 
@@ -58,9 +69,11 @@ curl -s "localhost:3000/api/v1/notes?q=ship&tag=meeting" -H "x-user-id: $U"
 
 ## Design and tradeoffs
 
-**Layout.** `routes` (HTTP + validation) -> `service` (authorization and rules) -> `repository` (SQL). `createApp(db)` takes an open database, so tests run the real stack against `:memory:`. Users/teams are thin enough that their routes talk to a small repository directly.
+**Layout.** `routes` (HTTP + validation) -> `service` (authorization and rules) -> `repository` (queries). `createApp(db)` takes an open database, so tests run the real stack against `:memory:`. Users/teams are thin enough that their routes talk to a small repository directly.
 
-**SQLite.** Zero setup, real transactions, and FTS5 for search, which keeps the project runnable with just `npm install`. Cost: a single writer and a single node. The repository layer isolates SQL, so Postgres would be a contained change.
+**SQLite.** Zero setup, real transactions, and FTS5 for search, which keeps the project runnable with just `npm install`. Cost: a single writer and a single node. The repository layer isolates queries, so Postgres would be a contained change.
+
+**Drizzle ORM** gives a typed schema, generated migrations and a DB browser (Drizzle Studio) while staying close to SQL. I chose it over Prisma because the interesting queries (visibility `OR` + subquery, FTS5 match, keyset cursor) need raw SQL fragments, which Drizzle lets me mix into typed queries and Prisma does not. Two things remain hand-written SQL: the FTS5 table/triggers (a custom migration) and the row-value cursor comparison and FTS match (small `sql` fragments). Tags are loaded with a second query per page instead of a JSON aggregate subquery: one extra round trip, simpler and fully typed.
 
 **Visibility is enforced in SQL** (`author = me OR team in my teams`) for lists, and by `canRead` for single notes, so search/tag/team filters can never leak other people's notes. Notes you can't see return **404, not 403**, to avoid revealing they exist.
 
@@ -78,4 +91,4 @@ curl -s "localhost:3000/api/v1/notes?q=ship&tag=meeting" -H "x-user-id: $U"
 - **Lost updates:** concurrent edits are last-write-wins. Next step: a `version` column checked via `If-Match`/ETag (409/412 on mismatch).
 - **No roles** within teams, no removing members or leaving a team, no team/user listing for others. If a member could be removed, note visibility would follow automatically since it is computed from membership at read time.
 - **Hard delete**, no history or trash.
-- No rate limiting, request logging, or migrations tool (the schema is idempotent `CREATE ... IF NOT EXISTS`).
+- No rate limiting or request logging. Migrations only roll forward (no down-migrations).
