@@ -9,21 +9,29 @@ beforeEach(() => {
   app = createApp(openDb(":memory:"));
 });
 
+const PASSWORD = "correct horse";
+const tokens = new Map<string, string>(); // user id -> bearer token
+
 async function makeUser(name: string): Promise<string> {
-  const res = await request(app).post("/api/v1/users").send({ name }).expect(201);
-  return res.body.id;
+  const username = `user_${name}`;
+  const reg = await request(app).post("/api/v1/users").send({ username, password: PASSWORD, name }).expect(201);
+  const login = await request(app).post("/api/v1/auth/login").send({ username, password: PASSWORD }).expect(200);
+  tokens.set(reg.body.id, login.body.token);
+  return reg.body.id;
 }
 
+const bearer = (userId: string) => `Bearer ${tokens.get(userId)}`;
+
 async function makeTeam(userId: string, name = "team"): Promise<string> {
-  const res = await request(app).post("/api/v1/teams").set("x-user-id", userId).send({ name }).expect(201);
+  const res = await request(app).post("/api/v1/teams").set("authorization", bearer(userId)).send({ name }).expect(201);
   return res.body.id;
 }
 
 const as = (userId: string) => ({
-  post: (url: string) => request(app).post(url).set("x-user-id", userId),
-  get: (url: string) => request(app).get(url).set("x-user-id", userId),
-  patch: (url: string) => request(app).patch(url).set("x-user-id", userId),
-  delete: (url: string) => request(app).delete(url).set("x-user-id", userId),
+  post: (url: string) => request(app).post(url).set("authorization", bearer(userId)),
+  get: (url: string) => request(app).get(url).set("authorization", bearer(userId)),
+  patch: (url: string) => request(app).patch(url).set("authorization", bearer(userId)),
+  delete: (url: string) => request(app).delete(url).set("authorization", bearer(userId)),
 });
 
 async function makeNote(userId: string, body: Record<string, unknown>) {
@@ -31,12 +39,55 @@ async function makeNote(userId: string, body: Record<string, unknown>) {
   return res.body;
 }
 
-describe("auth + validation", () => {
-  it("rejects missing or unknown users", async () => {
+describe("authentication", () => {
+  const register = (body: Record<string, unknown>) => request(app).post("/api/v1/users").send(body);
+  const login = (body: Record<string, unknown>) => request(app).post("/api/v1/auth/login").send(body);
+
+  it("rejects missing, malformed and unknown tokens", async () => {
     await request(app).get("/api/v1/notes").expect(401);
-    await request(app).get("/api/v1/notes").set("x-user-id", "nope").expect(401);
+    await request(app).get("/api/v1/notes").set("authorization", "Bearer nope").expect(401);
+    await request(app).get("/api/v1/notes").set("authorization", "Basic abc").expect(401);
   });
 
+  it("registers without exposing the password hash and rejects duplicate usernames", async () => {
+    const body = { username: "Ann_1", password: PASSWORD, name: "Ann" };
+    const res = await register(body).expect(201);
+    expect(res.body).toMatchObject({ username: "ann_1", name: "Ann" });
+    expect(JSON.stringify(res.body)).not.toMatch(/hash|password/i);
+    await register({ ...body, username: "ann_1" }).expect(409);
+  });
+
+  it("validates username and password", async () => {
+    await register({ username: "ab", password: PASSWORD, name: "x" }).expect(400);
+    await register({ username: "has space", password: PASSWORD, name: "x" }).expect(400);
+    await register({ username: "okname", password: "short", name: "x" }).expect(400);
+  });
+
+  it("logs in case-insensitively on username and gives the same 401 for bad password and unknown user", async () => {
+    await register({ username: "ann_1", password: PASSWORD, name: "Ann" }).expect(201);
+    const ok = await login({ username: "ANN_1", password: PASSWORD }).expect(200);
+    expect(ok.body.token).toEqual(expect.any(String));
+    const wrongPw = await login({ username: "ann_1", password: "wrong password" }).expect(401);
+    const unknown = await login({ username: "nobody", password: PASSWORD }).expect(401);
+    expect(wrongPw.body).toEqual(unknown.body);
+  });
+
+  it("lets a token work until logout, then rejects it", async () => {
+    const u = await makeUser("a");
+    await as(u).get("/api/v1/notes").expect(200);
+    await as(u).post("/api/v1/auth/logout").expect(204);
+    await as(u).get("/api/v1/notes").expect(401);
+  });
+
+  it("rejects expired sessions", async () => {
+    const expiring = createApp(openDb(":memory:"), { sessionTtlHours: -1 });
+    await request(expiring).post("/api/v1/users").send({ username: "ann_1", password: PASSWORD, name: "A" });
+    const res = await request(expiring).post("/api/v1/auth/login").send({ username: "ann_1", password: PASSWORD });
+    await request(expiring).get("/api/v1/notes").set("authorization", `Bearer ${res.body.token}`).expect(401);
+  });
+});
+
+describe("validation", () => {
   it("returns 400 with details for invalid input", async () => {
     const u = await makeUser("a");
     const res = await as(u).post("/api/v1/notes").send({ title: "" }).expect(400);

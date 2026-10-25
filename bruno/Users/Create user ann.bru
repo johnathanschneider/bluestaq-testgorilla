@@ -12,6 +12,8 @@ post {
 
 body:json {
   {
+    "username": "ann",
+    "password": "{{password}}",
     "name": "ann"
   }
 }
@@ -24,5 +26,6 @@ tests {
   test("user created", function () {
     expect(res.status).to.equal(201);
     expect(res.body.id).to.be.a("string");
+    expect(res.body.passwordHash).to.equal(undefined);
   });
 }

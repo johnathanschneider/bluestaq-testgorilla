@@ -5,9 +5,25 @@ import { index, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
+  username: text("username").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
   name: text("name").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+// Only the sha256 of the bearer token is stored, so a database leak yields no usable tokens.
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (t) => [index("idx_sessions_user").on(t.userId)],
+);
 
 export const teams = sqliteTable("teams", {
   id: text("id").primaryKey(),

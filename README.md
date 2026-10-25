@@ -24,11 +24,11 @@ npm run db:generate    # after editing schema.ts: generate a new migration
 npm run db:studio      # browse the database in a web UI (DB_PATH selects the file)
 ```
 
-`drizzle/0001_fts.sql` is hand-written: the FTS5 search index and its triggers cannot be expressed in the TypeScript schema. If you have a `notes.db` created before the move to Drizzle, delete it; it was built by the old schema bootstrap and will conflict with the migrations.
+`drizzle/0001_fts.sql` is hand-written: the FTS5 search index and its triggers cannot be expressed in the TypeScript schema. The migrations were regenerated when authentication was added (SQLite cannot add NOT NULL columns to existing tables). If you have a `notes.db` from an earlier version, delete it (`notes.db`, `-shm`, `-wal`); it will conflict with the migrations.
 
 ## Try it with Bruno
 
-[`bruno/`](bruno) is a [Bruno](https://www.usebruno.com) collection with sample data. With the server running, open the folder in Bruno (Open Collection), pick the **local** environment, and run the whole collection. Folders are by resource (Users, Teams, Notes) and run in that order: Users creates ann, bob and cara and Teams creates a team with ann and bob, storing their ids as variables for the Notes requests, so each run starts from fresh data (run the folders in order, not individually). Every request has assertions; names show the expected status. CLI: `npx @usebruno/cli run -r --env local` from inside `bruno/`.
+[`bruno/`](bruno) is a [Bruno](https://www.usebruno.com) collection with sample data. With the server running, open the folder in Bruno (Open Collection), pick the **local** environment, and run the whole collection. Folders run in order: Users registers ann, bob and cara, Auth logs them in and stores bearer tokens, Teams creates a team with ann and bob, and Notes uses those ids and tokens, so each run starts from fresh data (run the folders in order, not individually). Every request has assertions; names show the expected status. CLI: `npx @usebruno/cli run -r --env local` from inside `bruno/`.
 
 ## Concepts
 
@@ -36,15 +36,23 @@ npm run db:studio      # browse the database in a web UI (DB_PATH selects the fi
 - A **note** has an author, a title, a body, tags, and an optional team. No team = **private** to the author; with a team = visible to every member.
 - Permissions: anyone who can see a note can edit its content; only the **author** can delete it or change who it is shared with (and only with teams they belong to).
 
-### Authentication (stub)
+### Authentication
 
-Real auth is intentionally deferred. Callers send `X-User-Id: <id>` (ids come from `POST /users`). **This is not secure**: anyone who knows an id can act as that user. All of it lives in `src/middleware/identify.ts`; swapping in tokens/JWT means changing that one file, since routes and services only read `req.userId`. Authorization rules are real and enforced in the service layer regardless.
+Username/password with session tokens:
+
+1. `POST /users` registers `{username, password, name}` (public). Usernames are case-insensitive, 3-32 chars of `a-z 0-9 _`; passwords 8-72 chars.
+2. `POST /auth/login` with `{username, password}` returns `{token, expiresAt}` (default lifetime 24h, `SESSION_TTL_HOURS`).
+3. Every other call sends `Authorization: Bearer <token>`. `POST /auth/logout` revokes the token.
+
+Passwords are hashed with scrypt (per-user salt, `node:crypto`, no extra dependency). Only a sha256 of each token is stored, so a leaked database contains no usable credentials. A bad password and an unknown username give the identical 401 (and the same hashing work), so login does not reveal which usernames exist. All of it lives in `src/auth/` and `src/middleware/identify.ts`; routes and services only read `req.userId`. Authorization rules (who can read/edit/delete/share which note) are enforced in the service layer.
 
 ## API (`/api/v1`, JSON)
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/users` | `{name}` - no auth; returns the user id |
+| POST | `/users` | `{username, password, name}` - public registration; 409 if username taken |
+| POST | `/auth/login` | `{username, password}` -> `{token, expiresAt}` |
+| POST | `/auth/logout` | revokes the presented token; 204 |
 | POST | `/teams` | `{name}` - creator becomes a member |
 | GET | `/teams` | teams you belong to |
 | POST | `/teams/:id/members` | `{userId}` - any member may add others; 204 |
@@ -57,14 +65,15 @@ Real auth is intentionally deferred. Callers send `X-User-Id: <id>` (ids come fr
 
 List query params: `tag`, `teamId`, `q` (full-text, prefix match on the last word), `limit` (1-100, default 20), `cursor`. Response: `{items: Note[], nextCursor: string | null}`; pass `nextCursor` back as `cursor` for the next page.
 
-Errors: `{"error": {"code", "message", "details?"}}` with 400 (validation, with per-field `details`), 401 (missing/unknown user), 403 (visible but not allowed), 404.
+Errors: `{"error": {"code", "message", "details?"}}` with 400 (validation, with per-field `details`), 401 (missing/invalid/expired token or bad login), 403 (visible but not allowed), 404, 409 (username taken).
 
 ```bash
-U=$(curl -s -XPOST localhost:3000/api/v1/users -H 'content-type: application/json' -d '{"name":"ann"}' | jq -r .id)
-T=$(curl -s -XPOST localhost:3000/api/v1/teams -H "x-user-id: $U" -H 'content-type: application/json' -d '{"name":"platform"}' | jq -r .id)
-curl -s -XPOST localhost:3000/api/v1/notes -H "x-user-id: $U" -H 'content-type: application/json' \
+curl -s -XPOST localhost:3000/api/v1/users -H 'content-type: application/json' -d '{"username":"ann","password":"correct-horse","name":"Ann"}'
+TOKEN=$(curl -s -XPOST localhost:3000/api/v1/auth/login -H 'content-type: application/json' -d '{"username":"ann","password":"correct-horse"}' | jq -r .token)
+T=$(curl -s -XPOST localhost:3000/api/v1/teams -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"name":"platform"}' | jq -r .id)
+curl -s -XPOST localhost:3000/api/v1/notes -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d "{\"title\":\"Standup\",\"body\":\"ship it\",\"tags\":[\"meeting\"],\"teamId\":\"$T\"}"
-curl -s "localhost:3000/api/v1/notes?q=ship&tag=meeting" -H "x-user-id: $U"
+curl -s "localhost:3000/api/v1/notes?q=ship&tag=meeting" -H "authorization: Bearer $TOKEN"
 ```
 
 ## Design and tradeoffs
@@ -81,13 +90,15 @@ curl -s "localhost:3000/api/v1/notes?q=ship&tag=meeting" -H "x-user-id: $U"
 
 **Search** uses an FTS5 external-content index kept in sync by triggers. User input is quoted token-by-token so FTS operators/syntax can't cause errors or be injected. Matching is word/prefix based, not substring.
 
+**Sessions over HTTP Basic.** Basic auth would hash-check the password (deliberately slow) on every request; a login endpoint pays that cost once and issues a revocable, expiring token. Cost: a `sessions` table and a lookup per request.
+
 **Tags** are lowercased and de-duplicated (`Work` == `work`), max 20 per note.
 
 **Timestamps / IDs.** UUIDs and ISO-8601 UTC strings (sortable as text).
 
 ### Known gaps (deliberate scope cuts)
 
-- **Auth** is stubbed (above).
+- **Auth hardening:** no rate limiting or lockout on login (brute force is possible), no password change/reset, no email verification, no token refresh (log in again at expiry). Bearer tokens in `Authorization` assume HTTPS is terminated in front of the service.
 - **Lost updates:** concurrent edits are last-write-wins. Next step: a `version` column checked via `If-Match`/ETag (409/412 on mismatch).
 - **No roles** within teams, no removing members or leaving a team, no team/user listing for others. If a member could be removed, note visibility would follow automatically since it is computed from membership at read time.
 - **Hard delete**, no history or trash.

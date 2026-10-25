@@ -1,0 +1,27 @@
+meta {
+  name: Login bob
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+body:json {
+  {"username": "bob", "password": "{{password}}"}
+}
+
+script:post-response {
+  bru.setVar("bobToken", res.body.token);
+}
+
+tests {
+  test("token issued", function () {
+    expect(res.status).to.equal(200);
+    expect(res.body.token).to.be.a("string");
+    expect(res.body.expiresAt).to.be.a("string");
+  });
+}

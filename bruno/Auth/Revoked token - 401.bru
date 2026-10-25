@@ -1,0 +1,21 @@
+meta {
+  name: Revoked token - 401
+  type: http
+  seq: 8
+}
+
+get {
+  url: {{baseUrl}}/notes
+  body: none
+  auth: none
+}
+
+headers {
+  authorization: Bearer {{annTempToken}}
+}
+
+tests {
+  test("revoked token rejected", function () {
+    expect(res.status).to.equal(401);
+  });
+}

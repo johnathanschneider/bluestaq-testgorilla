@@ -21,6 +21,15 @@ CREATE TABLE `notes` (
 CREATE INDEX `idx_notes_updated` ON `notes` (`updated_at`,`id`);--> statement-breakpoint
 CREATE INDEX `idx_notes_author` ON `notes` (`author_id`);--> statement-breakpoint
 CREATE INDEX `idx_notes_team` ON `notes` (`team_id`);--> statement-breakpoint
+CREATE TABLE `sessions` (
+	`token_hash` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`created_at` text NOT NULL,
+	`expires_at` text NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_sessions_user` ON `sessions` (`user_id`);--> statement-breakpoint
 CREATE TABLE `team_members` (
 	`team_id` text NOT NULL,
 	`user_id` text NOT NULL,
@@ -38,6 +47,10 @@ CREATE TABLE `teams` (
 --> statement-breakpoint
 CREATE TABLE `users` (
 	`id` text PRIMARY KEY NOT NULL,
+	`username` text NOT NULL,
+	`password_hash` text NOT NULL,
 	`name` text NOT NULL,
 	`created_at` text NOT NULL
 );
+--> statement-breakpoint
+CREATE UNIQUE INDEX `users_username_unique` ON `users` (`username`);
