@@ -1,0 +1,23 @@
+meta {
+  name: List all (as bob) - no private notes
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/notes
+  body: none
+  auth: none
+}
+
+headers {
+  x-user-id: {{bobId}}
+}
+
+tests {
+  test("bob sees only team notes", function () {
+    expect(res.status).to.equal(200);
+    expect(res.body.items).to.have.length(3);
+    expect(res.body.items.map((n) => n.title)).to.not.include("My secret");
+  });
+}

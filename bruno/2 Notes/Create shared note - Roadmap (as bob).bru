@@ -1,0 +1,30 @@
+meta {
+  name: Create shared note - Roadmap (as bob)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/notes
+  body: json
+  auth: none
+}
+
+headers {
+  x-user-id: {{bobId}}
+}
+
+body:json {
+  {
+    "title": "Roadmap",
+    "body": "Q1 priorities and planning",
+    "tags": ["planning"],
+    "teamId": "{{teamId}}"
+  }
+}
+
+tests {
+  test("created", function () {
+    expect(res.status).to.equal(201);
+  });
+}

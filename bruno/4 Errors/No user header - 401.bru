@@ -1,0 +1,18 @@
+meta {
+  name: No user header - 401
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/notes
+  body: none
+  auth: none
+}
+
+tests {
+  test("unauthenticated", function () {
+    expect(res.status).to.equal(401);
+    expect(res.body.error.code).to.equal("unauthorized");
+  });
+}

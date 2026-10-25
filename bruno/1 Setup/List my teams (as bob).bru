@@ -1,0 +1,22 @@
+meta {
+  name: List my teams (as bob)
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/teams
+  body: none
+  auth: none
+}
+
+headers {
+  x-user-id: {{bobId}}
+}
+
+tests {
+  test("bob sees platform", function () {
+    expect(res.status).to.equal(200);
+    expect(res.body.items.map((t) => t.name)).to.include("platform");
+  });
+}

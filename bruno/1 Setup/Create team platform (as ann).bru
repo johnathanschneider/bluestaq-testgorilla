@@ -1,0 +1,31 @@
+meta {
+  name: Create team platform (as ann)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/teams
+  body: json
+  auth: none
+}
+
+headers {
+  x-user-id: {{annId}}
+}
+
+body:json {
+  {
+    "name": "platform"
+  }
+}
+
+script:post-response {
+  bru.setVar("teamId", res.body.id);
+}
+
+tests {
+  test("team created", function () {
+    expect(res.status).to.equal(201);
+  });
+}

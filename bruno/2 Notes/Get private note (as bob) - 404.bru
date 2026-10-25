@@ -1,0 +1,21 @@
+meta {
+  name: Get private note (as bob) - 404
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/notes/{{privateNoteId}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-user-id: {{bobId}}
+}
+
+tests {
+  test("private note is hidden", function () {
+    expect(res.status).to.equal(404);
+  });
+}

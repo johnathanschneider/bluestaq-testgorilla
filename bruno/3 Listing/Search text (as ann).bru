@@ -1,0 +1,22 @@
+meta {
+  name: Search text (as ann)
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/notes?q=avoca
+  body: none
+  auth: none
+}
+
+headers {
+  x-user-id: {{annId}}
+}
+
+tests {
+  test("prefix search finds the private note", function () {
+    expect(res.status).to.equal(200);
+    expect(res.body.items.map((n) => n.title)).to.eql(["My secret"]);
+  });
+}

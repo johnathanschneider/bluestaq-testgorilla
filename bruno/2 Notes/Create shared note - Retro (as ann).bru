@@ -1,0 +1,30 @@
+meta {
+  name: Create shared note - Retro (as ann)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/notes
+  body: json
+  auth: none
+}
+
+headers {
+  x-user-id: {{annId}}
+}
+
+body:json {
+  {
+    "title": "Retro",
+    "body": "what went well, what to improve",
+    "tags": ["meeting", "retro"],
+    "teamId": "{{teamId}}"
+  }
+}
+
+tests {
+  test("created", function () {
+    expect(res.status).to.equal(201);
+  });
+}

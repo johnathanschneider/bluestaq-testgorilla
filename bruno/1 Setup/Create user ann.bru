@@ -1,0 +1,28 @@
+meta {
+  name: Create user ann
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/users
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "ann"
+  }
+}
+
+script:post-response {
+  bru.setVar("annId", res.body.id);
+}
+
+tests {
+  test("user created", function () {
+    expect(res.status).to.equal(201);
+    expect(res.body.id).to.be.a("string");
+  });
+}

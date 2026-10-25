@@ -1,0 +1,28 @@
+meta {
+  name: Share with a team you are not in - 403
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/notes
+  body: json
+  auth: none
+}
+
+headers {
+  x-user-id: {{caraId}}
+}
+
+body:json {
+  {
+    "title": "Sneaky",
+    "teamId": "{{teamId}}"
+  }
+}
+
+tests {
+  test("cannot share with foreign team", function () {
+    expect(res.status).to.equal(403);
+  });
+}

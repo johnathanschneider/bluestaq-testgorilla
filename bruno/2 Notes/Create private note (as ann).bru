@@ -1,0 +1,35 @@
+meta {
+  name: Create private note (as ann)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/notes
+  body: json
+  auth: none
+}
+
+headers {
+  x-user-id: {{annId}}
+}
+
+body:json {
+  {
+    "title": "My secret",
+    "body": "avocado toast recipe",
+    "tags": ["personal", "Food"]
+  }
+}
+
+script:post-response {
+  bru.setVar("privateNoteId", res.body.id);
+}
+
+tests {
+  test("private note created, tags normalized", function () {
+    expect(res.status).to.equal(201);
+    expect(res.body.teamId).to.equal(null);
+    expect(res.body.tags).to.eql(["food", "personal"]);
+  });
+}

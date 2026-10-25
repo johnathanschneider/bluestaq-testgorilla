@@ -1,0 +1,21 @@
+meta {
+  name: Get shared note (as cara, outsider) - 404
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/notes/{{sharedNoteId}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-user-id: {{caraId}}
+}
+
+tests {
+  test("non-member cannot see team note", function () {
+    expect(res.status).to.equal(404);
+  });
+}

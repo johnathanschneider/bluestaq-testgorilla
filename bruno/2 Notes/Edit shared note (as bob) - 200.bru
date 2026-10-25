@@ -1,0 +1,29 @@
+meta {
+  name: Edit shared note (as bob) - 200
+  type: http
+  seq: 8
+}
+
+patch {
+  url: {{baseUrl}}/notes/{{sharedNoteId}}
+  body: json
+  auth: none
+}
+
+headers {
+  x-user-id: {{bobId}}
+}
+
+body:json {
+  {
+    "body": "ship the notes API this week (bob added a comment)"
+  }
+}
+
+tests {
+  test("team member can edit content", function () {
+    expect(res.status).to.equal(200);
+    expect(res.body.body).to.contain("bob added");
+    expect(res.body.title).to.equal("Standup");
+  });
+}

@@ -1,0 +1,21 @@
+meta {
+  name: Delete note (as ann) - 204
+  type: http
+  seq: 3
+}
+
+delete {
+  url: {{baseUrl}}/notes/{{sharedNoteId}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-user-id: {{annId}}
+}
+
+tests {
+  test("author can delete", function () {
+    expect(res.status).to.equal(204);
+  });
+}

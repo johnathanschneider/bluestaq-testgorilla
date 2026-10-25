@@ -1,0 +1,27 @@
+meta {
+  name: Create user cara (outsider)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/users
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "cara"
+  }
+}
+
+script:post-response {
+  bru.setVar("caraId", res.body.id);
+}
+
+tests {
+  test("user created", function () {
+    expect(res.status).to.equal(201);
+  });
+}

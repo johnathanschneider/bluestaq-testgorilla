@@ -1,0 +1,27 @@
+meta {
+  name: Add bob to team (as ann)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/teams/{{teamId}}/members
+  body: json
+  auth: none
+}
+
+headers {
+  x-user-id: {{annId}}
+}
+
+body:json {
+  {
+    "userId": "{{bobId}}"
+  }
+}
+
+tests {
+  test("member added", function () {
+    expect(res.status).to.equal(204);
+  });
+}

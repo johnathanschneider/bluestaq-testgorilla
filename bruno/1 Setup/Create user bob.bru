@@ -1,0 +1,27 @@
+meta {
+  name: Create user bob
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/users
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "bob"
+  }
+}
+
+script:post-response {
+  bru.setVar("bobId", res.body.id);
+}
+
+tests {
+  test("user created", function () {
+    expect(res.status).to.equal(201);
+  });
+}

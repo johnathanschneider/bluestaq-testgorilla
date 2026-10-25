@@ -1,0 +1,29 @@
+meta {
+  name: Invalid note - 400
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/notes
+  body: json
+  auth: none
+}
+
+headers {
+  x-user-id: {{annId}}
+}
+
+body:json {
+  {
+    "title": "",
+    "tags": ["bad tag!"]
+  }
+}
+
+tests {
+  test("validation details returned", function () {
+    expect(res.status).to.equal(400);
+    expect(res.body.error.details.length).to.be.greaterThan(0);
+  });
+}

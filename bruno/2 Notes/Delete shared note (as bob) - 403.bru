@@ -1,0 +1,21 @@
+meta {
+  name: Delete shared note (as bob) - 403
+  type: http
+  seq: 10
+}
+
+delete {
+  url: {{baseUrl}}/notes/{{sharedNoteId}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-user-id: {{bobId}}
+}
+
+tests {
+  test("only the author can delete", function () {
+    expect(res.status).to.equal(403);
+  });
+}

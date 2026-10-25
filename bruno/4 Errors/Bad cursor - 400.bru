@@ -1,0 +1,21 @@
+meta {
+  name: Bad cursor - 400
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/notes?cursor=garbage
+  body: none
+  auth: none
+}
+
+headers {
+  x-user-id: {{annId}}
+}
+
+tests {
+  test("invalid cursor rejected", function () {
+    expect(res.status).to.equal(400);
+  });
+}

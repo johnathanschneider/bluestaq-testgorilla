@@ -1,0 +1,21 @@
+meta {
+  name: Get unshared note (as bob) - 404
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/notes/{{sharedNoteId}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-user-id: {{bobId}}
+}
+
+tests {
+  test("bob lost access", function () {
+    expect(res.status).to.equal(404);
+  });
+}
