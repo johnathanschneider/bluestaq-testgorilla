@@ -16,7 +16,7 @@ npm run db:studio    # web UI to browse the database
 
 Env vars: `PORT` (3000), `DB_PATH` (`notes.db`), `SESSION_TTL_HOURS` (24). Migrations in [drizzle/](drizzle) run automatically on startup. If you have a `notes.db` from an older version, delete it (with its `-shm` and `-wal` files).
 
-## Why these choices
+## Design choices, and why
 
 - **Node.js + Express:** lightweight, low memory use, and a large ecosystem with plenty of support.
 - **SQLite:** lightweight and needs no separate container or service. This app does not need many resources. Queries are isolated in repositories, so moving to Postgres later is a contained change.
