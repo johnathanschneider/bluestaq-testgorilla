@@ -1,6 +1,6 @@
 # Team Notes API
 
-A REST backend for a note-taking service shared among small teams. TypeScript, Node.js, Express 5, SQLite (`better-sqlite3`), `zod` validation, Vitest + supertest tests.
+A REST backend for a note-taking service shared among small teams. Users keep private notes or share them with teams they belong to.
 
 ## Run it
 
@@ -8,98 +8,84 @@ Requires Node 20+.
 
 ```bash
 npm install
-npm run dev        # http://localhost:3000, data in ./notes.db
-npm test           # integration tests (in-memory SQLite)
+npm run dev          # http://localhost:3000, data in ./notes.db
+npm test             # integration tests against in-memory SQLite
 npm run build && npm start
+npm run db:studio    # web UI to browse the database
 ```
 
-Config via env: `PORT` (default 3000), `DB_PATH` (default `notes.db`; `:memory:` works).
+Env vars: `PORT` (3000), `DB_PATH` (`notes.db`), `SESSION_TTL_HOURS` (24). Migrations in [drizzle/](drizzle) run automatically on startup. If you have a `notes.db` from an older version, delete it (with its `-shm` and `-wal` files).
 
-### Database and migrations
+## Why these choices
 
-The schema is defined in TypeScript ([src/db/schema.ts](src/db/schema.ts)) with Drizzle ORM. SQL migrations in [drizzle/](drizzle) are applied automatically on startup (including in tests).
+- **Node.js + Express:** lightweight, low memory use, and a large ecosystem with plenty of support.
+- **SQLite:** lightweight and needs no separate container or service. This app does not need many resources. Queries are isolated in repositories, so moving to Postgres later is a contained change.
+- **ORM (Drizzle) over raw SQL:** standardizes database access and prevents SQL mistakes, with a typed schema and generated migrations. Drizzle Studio gives a web UI to double-check the data. The full-text search index (FTS5) is the exception: it is hand-written SQL in a custom migration, because an ORM can't express it.
+- **Bruno collection ([bruno/](bruno)), kept in sync with the API:** developers can test the API on the fly. Every request has assertions. In Bruno, open the folder, pick the `local` environment and run the whole collection (folders run in order: Users, Auth, Teams, Notes). CLI: `npx @usebruno/cli run -r --env local` from `bruno/`.
+- **Basic username/password auth:** ensures the basics, such as users not reaching protected endpoints or notes they have no access to. Passwords are hashed with scrypt, and sessions use random tokens (only their hash is stored) that expire after 24h.
 
-```bash
-npm run db:generate    # after editing schema.ts: generate a new migration
-npm run db:studio      # browse the database in a web UI (DB_PATH selects the file)
-```
+## API
 
-`drizzle/0001_fts.sql` is hand-written: the FTS5 search index and its triggers cannot be expressed in the TypeScript schema. The migrations were regenerated when authentication was added (SQLite cannot add NOT NULL columns to existing tables). If you have a `notes.db` from an earlier version, delete it (`notes.db`, `-shm`, `-wal`); it will conflict with the migrations.
+Base path `/api/v1` (except `/health`). "Bearer" means `Authorization: Bearer <token>` from login.
 
-## Try it with Bruno
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| GET | `/health` | none | liveness |
+| POST | `/users` | none | register `{username, password, name}` |
+| POST | `/auth/login` | none | `{username, password}` returns `{token, expiresAt}` |
+| POST | `/auth/logout` | Bearer | revoke the current token |
+| POST | `/teams` | Bearer | create a team (you become a member) |
+| GET | `/teams` | Bearer | teams you belong to |
+| POST | `/teams/:teamId/members` | Bearer | add a member `{userId}` |
+| POST | `/notes` | Bearer | create `{title, body?, tags?, teamId?}` |
+| GET | `/notes` | Bearer | list notes you can see |
+| GET | `/notes/:id` | Bearer | get one note |
+| PATCH | `/notes/:id` | Bearer | edit any of `title, body, tags, teamId` |
+| DELETE | `/notes/:id` | Bearer | delete (author only) |
 
-[`bruno/`](bruno) is a [Bruno](https://www.usebruno.com) collection with sample data. With the server running, open the folder in Bruno (Open Collection), pick the **local** environment, and run the whole collection. Folders run in order: Users registers ann, bob and cara, Auth logs them in and stores bearer tokens, Teams creates a team with ann and bob, and Notes uses those ids and tokens, so each run starts from fresh data (run the folders in order, not individually). Every request has assertions; names show the expected status. CLI: `npx @usebruno/cli run -r --env local` from inside `bruno/`.
+- **List filters:** `tag`, `teamId`, `q` (full-text), `limit` (1-100, default 20), `cursor`. Response: `{items, nextCursor}`.
+- **Errors:** `{"error": {"code", "message", "details?"}}` with 400 (validation), 401 (missing, invalid or expired token, or bad login), 403 (visible but not allowed), 404, 409 (username taken).
 
-## Concepts
+## Data model
 
-- **Users** and **teams** (a user can be in many teams).
-- A **note** has an author, a title, a body, tags, and an optional team. No team = **private** to the author; with a team = visible to every member.
-- Permissions: anyone who can see a note can edit its content; only the **author** can delete it or change who it is shared with (and only with teams they belong to).
+Defined in [src/db/schema.ts](src/db/schema.ts).
 
-### Authentication
-
-Username/password with session tokens:
-
-1. `POST /users` registers `{username, password, name}` (public). Usernames are case-insensitive, 3-32 chars of `a-z 0-9 _`; passwords 8-72 chars.
-2. `POST /auth/login` with `{username, password}` returns `{token, expiresAt}` (default lifetime 24h, `SESSION_TTL_HOURS`).
-3. Every other call sends `Authorization: Bearer <token>`. `POST /auth/logout` revokes the token.
-
-Passwords are hashed with scrypt (per-user salt, `node:crypto`, no extra dependency). Only a sha256 of each token is stored, so a leaked database contains no usable credentials. A bad password and an unknown username give the identical 401 (and the same hashing work), so login does not reveal which usernames exist. All of it lives in `src/auth/` and `src/middleware/identify.ts`; routes and services only read `req.userId`. Authorization rules (who can read/edit/delete/share which note) are enforced in the service layer.
-
-## API (`/api/v1`, JSON)
-
-| Method | Path | Notes |
+| Table | Key columns | Notes |
 | --- | --- | --- |
-| POST | `/users` | `{username, password, name}` - public registration; 409 if username taken |
-| POST | `/auth/login` | `{username, password}` -> `{token, expiresAt}` |
-| POST | `/auth/logout` | revokes the presented token; 204 |
-| POST | `/teams` | `{name}` - creator becomes a member |
-| GET | `/teams` | teams you belong to |
-| POST | `/teams/:id/members` | `{userId}` - any member may add others; 204 |
-| POST | `/notes` | `{title, body?, tags?, teamId?}` |
-| GET | `/notes` | list notes you can see (see below) |
-| GET | `/notes/:id` | |
-| PATCH | `/notes/:id` | any subset of `title, body, tags, teamId` (`teamId: null` makes it private) |
-| DELETE | `/notes/:id` | author only; 204 |
-| GET | `/health` | liveness |
+| `users` | `id`, `username` (unique), `name`, `password_hash` | password is a salted scrypt hash, never returned |
+| `sessions` | `token_hash`, `user_id`, `expires_at` | login tokens, stored hashed |
+| `teams` | `id`, `name` | |
+| `team_members` | `team_id`, `user_id` | many-to-many users and teams |
+| `notes` | `id`, `author_id`, `team_id?`, `title`, `body`, timestamps | no team = private to the author |
+| `note_tags` | `note_id`, `tag` | tags are lowercase, de-duplicated, max 20 per note |
+| `notes_fts` | (virtual) | FTS5 search index kept in sync by triggers |
 
-List query params: `tag`, `teamId`, `q` (full-text, prefix match on the last word), `limit` (1-100, default 20), `cursor`. Response: `{items: Note[], nextCursor: string | null}`; pass `nextCursor` back as `cursor` for the next page.
+## Behavior
 
-Errors: `{"error": {"code", "message", "details?"}}` with 400 (validation, with per-field `details`), 401 (missing/invalid/expired token or bad login), 403 (visible but not allowed), 404, 409 (username taken).
+- A note is visible to its author, or to members of its team. Notes you cannot see return **404**, not 403, so their existence is not revealed.
+- Anyone who can see a note can edit it. Only the author can delete it or change which team it is shared with (and only with teams they belong to).
+- Lists use keyset pagination on `(updated_at, id)`, so pages stay stable while notes change. Search is word-prefix based and results are ordered by recency.
 
-```bash
-curl -s -XPOST localhost:3000/api/v1/users -H 'content-type: application/json' -d '{"username":"ann","password":"correct-horse","name":"Ann"}'
-TOKEN=$(curl -s -XPOST localhost:3000/api/v1/auth/login -H 'content-type: application/json' -d '{"username":"ann","password":"correct-horse"}' | jq -r .token)
-T=$(curl -s -XPOST localhost:3000/api/v1/teams -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{"name":"platform"}' | jq -r .id)
-curl -s -XPOST localhost:3000/api/v1/notes -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d "{\"title\":\"Standup\",\"body\":\"ship it\",\"tags\":[\"meeting\"],\"teamId\":\"$T\"}"
-curl -s "localhost:3000/api/v1/notes?q=ship&tag=meeting" -H "authorization: Bearer $TOKEN"
-```
+## What I would add with more time
 
-## Design and tradeoffs
+**Security**
+- **Login rate limiting and lockout.** Today a password can be guessed without limit. Per-IP and per-username throttling (for example `express-rate-limit`, or a store shared across instances) is the most important gap.
+- **Password change and reset.** Change needs the current password and should revoke other sessions. Reset needs an email flow with single-use, expiring links.
+- **Session management.** Token refresh or sliding expiry so users aren't logged out mid-day, plus a "log out everywhere" endpoint.
+- **Security headers and request logging.** `helmet`, structured request logs with request ids, and an audit trail for sharing and deletes. HTTPS is assumed to be terminated in front of the service.
 
-**Layout.** `routes` (HTTP + validation) -> `service` (authorization and rules) -> `repository` (queries). `createApp(db)` takes an open database, so tests run the real stack against `:memory:`. Users/teams are thin enough that their routes talk to a small repository directly.
+**Collaboration**
+- **Team roles and membership management.** Owner, editor and viewer roles, removing members, leaving a team, and deleting a team. Note visibility is computed from membership at read time, so access would follow automatically.
+- **Safe concurrent edits.** Edits are last-write-wins today. Add a `version` column checked through `If-Match`/ETag headers, returning 412 on a conflict.
+- **Soft delete and history.** Deletes are permanent. A trash with restore and a note revision history would make mistakes recoverable.
 
-**SQLite.** Zero setup, real transactions, and FTS5 for search, which keeps the project runnable with just `npm install`. Cost: a single writer and a single node. The repository layer isolates queries, so Postgres would be a contained change.
+**API and search**
+- **Relevance-ranked search.** Results are ordered by recency. FTS5 can rank by relevance (bm25), and `q` could return snippets with highlights.
+- **Richer queries.** Sorting options, date filters, and listing users or team members.
+- **Generated API docs.** An OpenAPI spec from the zod schemas, served as Swagger UI, alongside the Bruno collection.
 
-**Drizzle ORM** gives a typed schema, generated migrations and a DB browser (Drizzle Studio) while staying close to SQL. I chose it over Prisma because the interesting queries (visibility `OR` + subquery, FTS5 match, keyset cursor) need raw SQL fragments, which Drizzle lets me mix into typed queries and Prisma does not. Two things remain hand-written SQL: the FTS5 table/triggers (a custom migration) and the row-value cursor comparison and FTS match (small `sql` fragments). Tags are loaded with a second query per page instead of a JSON aggregate subquery: one extra round trip, simpler and fully typed.
-
-**Visibility is enforced in SQL** (`author = me OR team in my teams`) for lists, and by `canRead` for single notes, so search/tag/team filters can never leak other people's notes. Notes you can't see return **404, not 403**, to avoid revealing they exist.
-
-**Keyset pagination** on `(updated_at, id)` instead of offset: pages stay stable while teammates edit, and cost doesn't grow with depth. Tradeoff: no random page access, and results are ordered by recency, not search relevance, even when `q` is set.
-
-**Search** uses an FTS5 external-content index kept in sync by triggers. User input is quoted token-by-token so FTS operators/syntax can't cause errors or be injected. Matching is word/prefix based, not substring.
-
-**Sessions over HTTP Basic.** Basic auth would hash-check the password (deliberately slow) on every request; a login endpoint pays that cost once and issues a revocable, expiring token. Cost: a `sessions` table and a lookup per request.
-
-**Tags** are lowercased and de-duplicated (`Work` == `work`), max 20 per note.
-
-**Timestamps / IDs.** UUIDs and ISO-8601 UTC strings (sortable as text).
-
-### Known gaps (deliberate scope cuts)
-
-- **Auth hardening:** no rate limiting or lockout on login (brute force is possible), no password change/reset, no email verification, no token refresh (log in again at expiry). Bearer tokens in `Authorization` assume HTTPS is terminated in front of the service.
-- **Lost updates:** concurrent edits are last-write-wins. Next step: a `version` column checked via `If-Match`/ETag (409/412 on mismatch).
-- **No roles** within teams, no removing members or leaving a team, no team/user listing for others. If a member could be removed, note visibility would follow automatically since it is computed from membership at read time.
-- **Hard delete**, no history or trash.
-- No rate limiting or request logging. Migrations only roll forward (no down-migrations).
+**Operations**
+- **Down-migrations and backups.** Migrations only roll forward. Add rollback scripts and a scheduled backup of the SQLite file.
+- **Postgres and containers.** A Dockerfile and compose file, and a Postgres option if the service needs more than one instance or heavy concurrent writes. The repository layer isolates the queries.
+- **CI.** Run typecheck, tests, and the Bruno CLI collection on every push.
+- **More tests.** Unit tests for the services, and a test that checks the migrations against a populated database.
