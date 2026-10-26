@@ -3,13 +3,6 @@ import type { Db } from "../db/connection";
 import { findUserIdByToken } from "../auth/sessions";
 import { unauthorized } from "../errors";
 
-declare module "express-serve-static-core" {
-  interface Request {
-    userId: string;
-    token: string;
-  }
-}
-
 /**
  * Authenticates `Authorization: Bearer <token>` against the sessions table.
  * This is the only place that decides who the caller is; routes and services
